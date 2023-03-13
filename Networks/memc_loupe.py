@@ -48,7 +48,7 @@ class Memc_LOUPE(nn.Module):
             last_tensor_mask = (prob_mask_tensor > thresh_tensor) + 0   
         return last_tensor_mask.to(device=self.device)
 
-    def forward(self,mask,option):
+    def forward(self,mask,option=True):
         B,C,H,W=mask.shape
         assert H==256 and W==256
         dcmask = self.calculate_Mask(mask, option=True)#inital work

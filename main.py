@@ -50,7 +50,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--strain', '-strain', type=str, default=None, help='file_name_train')
 parser.add_argument('--vtrain', '-vtrain', type=str, default=None, help='file_name_train')
 parser.add_argument('--stest', '-stest', type=str, default=None, help='file_name_test')
-parser.add_argument('--dc_ratio','-dc_ratio', type=float, default=0.5, help='file_name_test')
+parser.add_argument('--dc_ratio','-dc_ratio', type=float, default=0.25, help='file_name_test')
 
 parser.add_argument('--exp-name', type=str, default='self-supervised MRI reconstruction', help='name of experiment')
 # parameters related to distributed training
@@ -184,42 +184,26 @@ def forward(mode, rank, model, dataloader, criterion, optimizer, log, args, epoc
     for iter_num, data_batch in enumerate(t):
 
         im_gt = data_batch[0].to(rank, non_blocking=True)
-        und_mask = data_batch[1].to(rank, non_blocking=True)
-        dc_mask = data_batch[2].to(rank, non_blocking=True)
-        loss_mask = data_batch[3].to(rank, non_blocking=True)
-        und_mask=und_mask.permute(0,3,1,2)
-        dc_mask=dc_mask.permute(0,3,1,2)
-        loss_mask=loss_mask.permute(0,3,1,2)
-        # val与train保持一致 学到的原始mask输出
-        output,loss_mask,dc_mask,und_mask = model(und_mask.contiguous(),im_gt,args.option,args.mode,dc_mask,loss_mask)#output class 设成1
-        # output,loss_mask,dc_mask = model(und_mask.contiguous(),im_gt,option,args.mode)#output class 设成1
-        print('args.mode',args.mode)
         
+        # output,loss_mask,dc_mask,und_mask = model(und_mask.contiguous(),im_gt,args.option,args.mode,dc_mask,loss_mask)#output class 设成1
+        output_img,under_mask = model(im_gt,args.option,args.mode)#output class 设成1
+
         #calculate loss
         gt_kspace = complex2pseudo(image2kspace(pseudo2complex(im_gt)))
-        loss_undersampled_kspace=gt_kspace*loss_mask
-        output_kspace=complex2pseudo(image2kspace(pseudo2complex(output)))
-        batch_loss=cal_loss(loss_undersampled_kspace,output_kspace,loss_mask)
-        under_img=complex2pseudo(kspace2image(pseudo2complex(gt_kspace*und_mask)))
-
-        net_img_dc=complex2pseudo(kspace2image(pseudo2complex(gt_kspace*dc_mask)))
-        net_img_loss=complex2pseudo(kspace2image(pseudo2complex(gt_kspace*loss_mask)))
-        output_dc=output
+        
+        output_kspace=complex2pseudo(image2kspace(pseudo2complex(output_img)))
+        gt_mask=torch.ones_like(under_mask)
+        #有监督
+        batch_loss=cal_loss(gt_kspace,output_kspace,gt_mask)
+        under_img=complex2pseudo(kspace2image(pseudo2complex(gt_kspace*under_mask))) #得到欠采输入的图像
         
 
-        # 保存生成图像
+        # 保存生成图像 欠采输入 生成的mask 重建输出
         
         if(args.strain!=None and args.mode=='train'):
-            save_images(under_img,net_img_dc,net_img_loss,\
-                        output_dc,und_mask,\
-                            dc_mask,loss_mask,\
-                                im_gt,iter_num,args.strain,mode)
+            save_images(under_img,output_img,under_mask,im_gt,iter_num,args.strain,mode)
         if(args.stest!=None and args.mode=='test'):
-            save_images(under_img,net_img_dc,net_img_loss,\
-                        output_dc,und_mask,\
-                            dc_mask,loss_mask,\
-                                im_gt,iter_num,args.stest,mode)
-    
+            save_images(under_img,output_img,under_mask,im_gt,iter_num,args.stest,mode)  
 
         if mode == 'train':
             optimizer.zero_grad()
@@ -230,25 +214,28 @@ def forward(mode, rank, model, dataloader, criterion, optimizer, log, args, epoc
             optimizer.step()
 
         gg=pseudo2real(im_gt)
-        out=pseudo2real(output)
+        out=pseudo2real(output_img)
         # gg=(gg-torch.min(gg))/(torch.max(gg)-torch.min(gg))
         # out=(out-torch.min(out))/(torch.max(out)-torch.min(out))
 
         #计算学到mask的数值比例
-        rermask=rermask+(torch.sum(loss_mask[:,0,:,:])/torch.sum(und_mask[:,0,:,:]))
-        imrmask=imrmask+(torch.sum(loss_mask[:,1,:,:])/torch.sum(und_mask[:,1,:,:]))
+        # rermask=rermask+(torch.sum(loss_mask[:,0,:,:])/torch.sum(under_mask[:,0,:,:]))
+        # imrmask=imrmask+(torch.sum(loss_mask[:,1,:,:])/torch.sum(under_mask[:,1,:,:]))
+        rermask=100000
+        imrmask=100000
         # rermask=rermask+(torch.sum(loss_mask[:,0,:,:])/(256*256))
         # imrmask=imrmask+(torch.sum(loss_mask[:,1,:,:])/(256*256))
         #用于计算的中间量
-        trmask=torch.zeros_like(loss_mask[:,1,:,:])
-        srmask=torch.zeros_like(loss_mask[:,1,:,:])
+        # trmask=torch.zeros_like(loss_mask[:,1,:,:])
+        # srmask=torch.zeros_like(loss_mask[:,1,:,:])
         
-        #待改进
-        trmask[loss_mask[:,0,:,:]==1]=1
-        trmask[loss_mask[:,1,:,:]==1]=1
-        srmask[und_mask[:,0,:,:]==1]=1
-        srmask[und_mask[:,1,:,:]==1]=1
-        smask=smask+(torch.sum(trmask)/torch.sum(srmask)) #得到不分channel的统计量
+        # #待改进
+        # trmask[loss_mask[:,0,:,:]==1]=1
+        # trmask[loss_mask[:,1,:,:]==1]=1
+        # srmask[und_mask[:,0,:,:]==1]=1
+        # srmask[und_mask[:,1,:,:]==1]=1
+        # smask=smask+(torch.sum(trmask)/torch.sum(srmask)) #得到不分channel的统计量
+        smask=10000 #得到不分channel的统计量
 
         ssim+=compute_ssim(out,gg)
         psnr+=compute_psnr(out,gg)
@@ -257,7 +244,7 @@ def forward(mode, rank, model, dataloader, criterion, optimizer, log, args, epoc
 
     loss /= len(dataloader)
     log.append(loss)
-    testimg=  abs(torch.complex(output[0, 0], output[0, 1])).unsqueeze(0)
+    testimg=  abs(torch.complex(output_img[0, 0], output_img[0, 1])).unsqueeze(0)
     # testimg = (testimg - torch.min(testimg))/(torch.max(testimg) - torch.min(testimg))
     lmask0=loss_mask[0,0].unsqueeze(0)
     lmask1=loss_mask[0,1].unsqueeze(0)

@@ -3,7 +3,7 @@
 /runs/
 /figs/
 /mask/
-/data/
+/data/*.npz
 /saved_infor/
 /runs/
 LICENSE
